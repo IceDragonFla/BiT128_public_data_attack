@@ -1,0 +1,904 @@
+% !TEX program = xelatex
+% 编译：xelatex umodel_report.tex （两遍）
+\documentclass[11pt,a4paper]{ctexart}
+
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black]{hyperref}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small universal 模型报告 v19（交付版 + NIST 数据集）}
+\fancyhead[R]{\small\thepage}
+
+\newtcolorbox{keybox}[1][]
+  {colback=blue!4,colframe=blue!55!black,title={#1},fonttitle=\bfseries,breakable}
+\newtcolorbox{askbox}[1][]
+  {colback=orange!5,colframe=orange!60!black,title={#1},fonttitle=\bfseries,breakable}
+\newtcolorbox{fixbox}[1][]
+  {colback=green!4,colframe=green!45!black,title={#1},fonttitle=\bfseries,breakable}
+
+\title{\bfseries 面向方案无关等价密钥恢复的通用模型\\[0.3em]
+\large ——umodel v4：声明式规范、迁移验证、真实 NICCS 实例与数据量级无关契约}
+\author{GLM-5.3 Flash max \and Jy L}
+\date{2026 年 10 月 8 日（v18 交付版：现行结论正文 + 历史附录）}
+
+\begin{document}
+\maketitle
+
+\begin{keybox}[摘要]
+本版（v3）将 umodel 从``BiT 类共享潜变量泄漏的分析工具''推进为
+\textbf{方案无关（scheme-agnostic）的等价密钥恢复框架}，并给出三项新成果：
+（1）\textbf{声明式规范层}：一个方案的全部攻击相关信息（环代数、掩码模型、
+通道清单、公钥关系、等价密钥派生规则）压缩为唯一入口 \texttt{SchemeSpec}；
+引擎、模拟器、解码器与验证器只读规范、不读方案代码。\texttt{check\_applicability}
+对规范做机器检查，超出已实现范围的部分（如带符号挑战的矩算子）被
+\emph{显式拒绝}并给出理由，而非静默出错。
+（2）\textbf{迁移验证}：在循环环 $\mathbb{Z}_q[x]/(x^d-1)$、带符号挑战、
+$q=8380417$、不同掩码宽度与 $K{=}L{=}1$ 的 Dilithium 风格玩具实例上，
+\emph{零引擎改动}端到端恢复（诊断半分相关 $+0.991$ 对对照 $-0.009$；
+$\sigma=0.0575$@$200$k，定律预测 $0.0536$；rounding 一次解码；
+公开自证 V1--V3 通过；$s_0$ 与等价密钥对真值精确一致）。
+（3）\textbf{数据量级无关契约}：管线在任意 $N$ 下要么返回自证候选、
+要么返回\emph{认证区间 + 所需样本量预测（坐标误差目标语义）}，永不因
+数据不足而失败。体积扫描（$N=2500\ldots400000$）证实
+$\sigma\propto N^{-1/2}$（拟合指数 $-0.497$），经验解码边界
+$(5\mathrm{k},10\mathrm{k}]$ 与预测量级一致。
+另报告一个新发现：公共 $\sigma$ 代理存在\textbf{折叠饱和}——
+$x\mapsto x-\mathrm{rint}(x)$ 在 $\sigma\gtrsim0.3$ 后信息论上不可辨识，
+管线据此标注下界语义并降级为字母表盒区间。
+诚实边界保持 v2 审校约定：矩算子仅对无符号负循环族有推导；诊断的
+``未检出''不等于安全性证明；\texttt{required\_N} 仅是坐标误差目标的
+模型预测，不是恢复成功率保证。
+\end{keybox}
+
+\tableofcontents
+
+\section{v17 必修项修复与三份交付物（按导师审阅）}
+
+\subsection{三条必修项（已修复并验证）}
+
+\textbf{F1 等价密钥派生符号 bug。}报告定义 $R=b_0-e$，但
+\texttt{spec.py} 的派生代码实现的是 $e=R-b_0$（相反符号）：边界坐标
+$R=8$ 处给出 $\hat e=+1$，正确值为 $-1$。修复后
+（$\hat e=-1$ 当 $R\ge$ 上界、$+1$ 当 $R\le$ 下界、$\hat b_0=R+\hat e$），
+派生密钥与审计中\textbf{伪造验证通过的那把密钥}（20/20 接受）
+逐位一致：768/768 系数、26/26 边界坐标全部正确。此前该 bug 不影响
+已发表的恢复结论（两路线都直接恢复 $s_0$ 再经关系导出 $R$，未经过
+此函数），但会影响任何依赖派生 $\hat e$ 的下游检查。
+
+\textbf{F2 信息指标统一。}v16 的``25.6 nats''更正为\textbf{平均对数
+似然比}（真假设下的 KL 型量），不是互信息：六个二元潜变量满足
+$I(\varepsilon;T\mid s,\mathrm{pk})\le H(\varepsilon)\le 6\ln2\approx4.16$
+nats/签名；平均 LLR 超过该上限指示的是重尾行为（信息集中在少数
+近确定性揭示的签名上），而非每签名信息量。相应地，给定真密钥的
+$\approx$60\% 分类能力是 oracle 臂的估计，\textbf{不构成}公开分类器
+应达目标或严格上界的证明。电池输出已改名 \texttt{mean\_llr} 并附
+\texttt{mi\_cap\_nats} 字段。
+
+\textbf{F3 接受偏差与定律语义。}$\sigma=\sqrt{\mathrm{Var}(y)/\tau N}$
+是\textbf{无偏假设下的方差陈述}：接受条件化原理上可以抹除回归信号
+（截断反例：$z=y+t$ 均匀掩码，仅接受公共内区间时接受后分布与 $t$
+无关）。因此 COMPASS 的 $4.8\times10^7$ 从``方案级''降级为
+\textbf{合成模型估计}——提升为方案级结论需要真实转录上的收敛性检查
+（估计量是否收敛到目标、偏差是否为零）。每个样本量公式现在必须
+回答三个问题：收敛性、偏差、方差对总误差的占比。
+
+\subsection{架构调整（谱方法降为后端）}
+
+六层架构（公开数据适配/方案语义/恢复目标/分析后端/验证后端/证据
+记录）的完整映射表、现行能力矩阵、CS-128 完整观测模型（含已知近似
+清单）与七步迁移验收协议见 \texttt{ARCHITECTURE\_v17.md}（随仓库
+发布）。要点：
+
+\begin{itemize}
+  \item $K\ne L$ 矩形关系合法化（估计-only 规范无需方阵逆；COMPASS
+        类 spec 不再被模拟器拒绝）；
+  \item 非 2 幂环次数的拒绝消息更正为``本后端的实现/效率限制''
+        而非数学不可能；
+  \item \textbf{接受事件与发布映射必须成为 L2 的正式对象}：目前在
+        CS-128 上以位精确代码存在（定点接受 240/240、z$_2$ 变换
+        768/768），但从代码提升为声明对象是下一版的架构工作。
+\end{itemize}
+
+\subsection{判定输出六字段分离（迁移协议红线）}
+
+框架输出必须区分六个独立状态，不得合并：
+\texttt{model\_supported} / \texttt{verification\_passed} /
+\texttt{signal\_detected} / \texttt{candidate\_found} /
+\texttt{candidate\_verified} / \texttt{budget\_exhausted}。
+``模型不支持''``数据未检出''``方案安全''三者混同是被禁止的输出。
+任何 required\_N 必须标注三元语义（坐标/解码、方差/含偏、合成/真实）。
+
+\subsection{gap 依赖重排与里程碑}
+
+按导师意见重排：① 合成→真实（CS-128 非 BiT 全流程：原始字节$\to$
+模型输入$\to$分析$\to$独立验证，z$_2$ 公开解码并入 L1）；② EM 冷启动
+（先声明并验证迭代的目标函数——当前脚本只在初始化填入已知坐标、
+后续被覆盖，测量的是``部分真值初始化后的迭代''而非``持续侧信息
+门槛''，两种实验需分开；软标签代入 WLS 的循环需明确是精确 EM、
+变分 EM 还是启发式交替）；③ 公开分类器（固定输入/训练法/跨密钥
+划分）；④ 稀疏 hint（先定义接受后观测概率）；⑤ shuttle（设计
+分布/实现近似/有限样本三分离）；⑥ 高阶矩定理（限定统计量族）。
+里程碑 A（单族可信原型）$\to$ B（族内真实迁移）$\to$ C（第二代数
+结构）$\to$ D（未参与设计方案的迁移——比十个同类合成 demo 更能
+证明通用性）。
+
+\subsection{版式与结构说明}
+
+v3--v16 的过程性记录移入附录（本版起正文只保留现行成立的结论）；
+第 3 页规范表已用 \texttt{resizebox} 修复溢出。下一份报告的主体
+交付：现行能力矩阵、完整观测模型、独立验证规范。
+
+
+
+\section{v19：真实 ML-DSA-44 与 NIST 候选覆盖矩阵}
+
+\subsection{NIST ML-DSA-44（pq-crystals 参考实现）全流程}
+
+下载 FIPS-204 参考实现并插桩，生成 30k 真实转录（过程中发现并修复
+一个生成器缺陷：确定性 $(m,\mathrm{rnd})$ 周期 256 导致掩码复用、
+有效样本 $N_{\mathrm{eff}}{=}256$——$\sigma$ 恰为
+$\sqrt{\mathrm{Var}(y)/(39\cdot256)}=758$ 且 split-half 相关 $=1.0$，
+诊断与修复后用 SHAKE 真随机重生成）。结果：
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+量 & 值 \\
+\midrule
+公开挑战重建（真 SHAKE256 移植） & 50/50 位精确 \\
+恒等式 $z=y+c{\ast}s_1$（真实数据） & 精确（残差=均匀掩码） \\
+回归 $\sigma$ @30k & $69.00$（定律 $69.96$，1.4\%） \\
+split-half 相关 & $-0.022$（无潜变量，符合预期） \\
+required\_N（坐标语义，合成模型估计） & $5.9\times10^8$ \\
+六字段判定 & model Y / verif Y / signal N / budget Y \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{掩码均值发现}：Dilithium 均匀掩码支撑
+$[-(\gamma_1{-}1),\gamma_1]$ \emph{不对称}，均值 $+0.5\ne0$——掩码
+模型需要均值参数而不只是方差（框架观测记录）。
+
+\subsection{NIST 多轮候选覆盖矩阵}
+
+十族闸门判定（正文表，详见 \texttt{run\_mldsa\_test.py} 输出）：
+ML-DSA 族内（本版实测）；Falcon 拒绝（无 FS-aborts 结构，高斯采样
+后端未实现）；SPHINCS+/Picnic/FAEST 拒绝（无代数关系）；Rainbow/
+GeMSS/MAYO/UOV/SNOVA 拒绝（第二代数结构——里程碑 C 目标）；CROSS
+拒绝（F$_p$ 线性码关系，离散后端可及）；HAWK/Raccoon 部分
+（HAWK 同 Falcon 类拒绝；Raccoon 疑似族内，待 spec）。
+
+\section{交付版现行结论（v18）}
+
+\subsection{CS-128 等价密钥独立验证闭环（里程碑 B 核心）}
+
+用\textbf{完全未修改}的参考 CS\_Sign/CS\_Verify 完成：v17 修复后的
+派生规则从 $R=e-t_0$ 构造 $(\hat e,\hat t_0)$（768/768 系数在支撑内
+且满足关系），把候选密钥字节回装 sk 后签 20 条新消息——
+\textbf{20/20 全部通过未修改验证器}；签名篡改与错误消息对照 4/4
+被拒。附带结构性发现：CS\_Verify 只读 $(\sigma,m,\mathrm{pk})$，
+从不读 $(e,t_0)$ 分解——密钥篡改对照在构造上空洞；等价性在
+\emph{验证方向}是平凡的，真正的约束在签名器的接受循环（可测为
+签名成功率）。至此框架对两个真实方案（BiT、CS-128）都有
+``字节$\to$分析$\to$独立验证''的完整闭环。
+
+\subsection{六字段判定与证据记录（L6 层落地）}
+
+\texttt{verdict.py}：\texttt{model\_supported} /
+\texttt{verification\_passed} / \texttt{signal\_detected} /
+\texttt{candidate\_found} / \texttt{candidate\_verified} /
+\texttt{budget\_exhausted} 六个独立字段 + 证据记录（输入来源、假设、
+误差语义、预算、结论等级）+ 三态分离器（模型不支持 / 未检出 /
+方案安全不可混同）。\texttt{run\_spec\_battery} 已输出该结构；
+COMPASS 在矩形关系合法化后于模拟器内运行（$\sigma$ 24.43 对定律
+24.42）。
+
+\subsection{现行能力矩阵（主交付一）}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lllll@{}}
+\toprule
+实例 & 数据 & 判定 & 端到端恢复 & 独立验证 \\
+\midrule
+BiT-128 & 真实 4M & 标签可用 & 全恢复（175k/1.5M） & 未修改验证器 20/20 \\
+CS-128 & 真实 500k & 拒绝+定量界 & oracle 臂 768/768 & \textbf{等价密钥 20/20}（本版） \\
+COMPASS-128 & 真实+合成 & 掩码受限$^{*}$ & 不可行（信息论） & — \\
+Dilithium2 & 合成 & 掩码受限$^{*}$ & 不可行 & — \\
+DLT-toy & 合成 & 标签可用 & 恢复（迁移） & 公开自证 \\
+Rhyme-geo & 合成 & 冷启动壁垒 & — & — \\
+SHUTTLE-128 & 结构 & 拒绝（新潜变量类） & — & — \\
+族外 29 & — & 闸门拒绝 & — & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+{\small $^{*}$合成模型估计（方差语义、无偏假设）——见 F3。}
+
+\subsection{完整观测模型与验证规范（主交付二、三）}
+
+CS-128 观测模型的精度分级与已知近似清单、六层架构映射、七步迁移
+验收协议：\texttt{ARCHITECTURE\_v17v18.md}（随仓库）。
+验证规范三级：V1--V3 公开自证（字母表/关系/盒）$\to$
+关系级等价（本版 CS 闭环）$\to$ 参考实现签名能力（BiT 已做、
+CS 已做）。required\_N 一律标注三元语义。
+
+\subsection{开放项（按依赖序，摘要）}
+
+① 合成$\to$真实（CS 全流程公开臂仍被冷启动阻断——这是结论不是
+缺陷）；② EM 目标函数声明与修复；③ 公开分类器跨密钥评估；
+④ 稀疏 hint 观测概率；⑤ shuttle 插桩；⑥ 矩定理限定族。
+里程碑 C（第二代数结构：有限域多变量后端）与 D（未参与设计方案
+迁移）为通用性的下一步证据。
+
+
+\appendix
+\section{v3 要解决的问题：``通用''到底指什么}
+
+v2 按教师审阅把结论强度收敛为``研究原型 + 显式适用条件''。v3 把
+``通用''具体化为\textbf{四条可检验的性质}，而不是一句口号：
+
+\begin{enumerate}
+  \item \textbf{声明性}：换一个方案 $=$ 换一份规范（数据），不是换代码。
+        方案特定信息只允许出现在 \texttt{SchemeSpec} 与数据摄取适配层。
+  \item \textbf{可拒绝性}：框架对\emph{做不到}的方案显式拒绝并给出理由
+        （哪些数学还没推导），而不是给出未经验证的错误算子。
+  \item \textbf{可迁移性}：在与 BiT-128 代数结构不同的实例上（不同环、
+        不同模数、带符号挑战、不同掩码宽度、不同 $K/L$），同一套引擎
+        端到端工作，且有自证与真值双重检查。
+  \item \textbf{数据量级无关}：任意 $N$ 下管线都有定义良好的输出——
+        要么自证恢复，要么认证区间 + 所需样本量；没有``样本不够就崩溃''
+        的中间态，也不存在静默降级。
+\end{enumerate}
+
+\begin{fixbox}[与 v2 结论强度的衔接]
+v2 删除的表述本版不再恢复：``组成律''仍按 v2 口径表述为\textbf{直接估计
+传递的局限}（三种测试过的融合方法无收益；联合推断的其他形式仍是开放
+问题）；诊断的负结果仍按三类输出表述（本版实验中修复变体的输出属于
+第 2 类：``当前数据未检出所测统计量的信号''，不是安全性证明）；
+\texttt{required\_N} 仍按 v2 的双含义区分——本版使用并标注的是
+\textbf{坐标误差目标}语义。
+\end{fixbox}
+
+\section{v3 架构}
+
+\subsection{声明式规范层（\texttt{spec.py}）}
+
+\begin{table}[htbp]\centering\small
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}llp{7.6cm}@{}}
+\toprule
+组件 & 内容 & 作用 \\
+\midrule
+\texttt{RingStructure} & kind $\in$ \{negacyclic, cyclic\} & 唯一的卷积约定：
+$(c*s)[k]=\sum_t c_t\,s[(k-p_t)\bmod d]\cdot\mathrm{flip}(k-p_t)$；
+谱基（负循环取 $2d$ 点 FFT 奇频，循环取 $d$ 点全谱）与逆基变换由环对象给出 \\
+\texttt{MaskModel} & kind + 半宽 $\gamma$ & 新鲜掩码分布（三角掩码
+$P(y)\propto\gamma-|y|$）及其方差——通用样本量定律的输入 \\
+\texttt{ChannelSpec} & kind $\in$ \{labels, shift\_regression,
+quantized\_moment\} & 通道三分类（\S3），声明观测量、被估量、
+是否依赖标签 \\
+\texttt{PublicKeyRelation} & 形式、$s$ 字母表、$R$ 盒、$\mathrm{pk\_scale}$、
+等价密钥派生 & 关系 $A_0 s = 16 b_1 + R \pmod q$；$R\mapsto(\hat e,\hat b_0)$
+的裁剪规则 \\
+\texttt{SchemeSpec} & 汇总以上全部 & 唯一入口；工厂方法
+\texttt{bit128()} / \texttt{bit128\_fixed()} / \texttt{dlt\_toy()} \\
+\bottomrule
+\end{tabular}%
+}%
+\end{table}
+
+\texttt{check\_applicability(spec)} 做六类机器检查：环次数为 2 的幂
+（否则无谱基）、环类型已实现、模数为素数（Fermat 概率测试，关系可逆
+的前提）、通道种类已知且声明了掩码模型、挑战重量合法、矩通道的
+环/符号组合在已推导范围内。任何一条不满足即拒绝并返回理由列表——
+这是``可拒绝性''的落点。自测（\texttt{selftest.py} T6）覆盖：
+两个合法实例被接受、非 2 幂次数被拒绝、BiT+带符号挑战被拒绝
+（矩算子出范围）。
+
+\subsection{通用管线（\texttt{pipeline.py}）}
+
+\texttt{UniversalPipeline} 把 v2 的驱动逻辑（补丁 P1--P7 全部保留）组织为
+五个阶段：适用性检查 $\to$ 共享潜变量诊断（半分相关 + 置换对照）
+$\to$ 逐通道估计（标签置信度 / $\hat s$ 与 $\sigma_{\mathrm{cert}}$ /
+$\hat R$）$\to$ 自适应解码阶梯（rounding $\to$ pair-scan $\to$ 窗口
+MITM，窗口加内存安全帽）$\to$ 验证（V1--V3 公开自证 + [SCORING]
+真值打分）与等价密钥派生。解码阶梯仍是\textbf{唯一的跨通道融合点}；
+v2 的校准口径不变：这是工程约束与已验证的传递局限，不是所有融合方法
+的不可能性定理。
+
+\section{三种通道机制的通用化（\texttt{channels.py}）}
+
+\paragraph{labels（低宽直接读出）} 窄掩码响应 $z_0=y_0+\varepsilon c$ 的
+逐坐标对数似然比
+$\mathrm{LLR}_k=\log f_0(z_k-c_k)-\log f_0(z_k+c_k)$ 求和为逐签名标签。
+v3 将 LUT 推广到\emph{任意 $\gamma_0$} 与\emph{带符号挑战}
+（$c\in\{-1,0,1\}$，利用 $\mathrm{LLR}(c{=}-1)=-\mathrm{LLR}(c{=}{+}1)$）。
+验证：BiT 网格上复现 v2 行为（合成数据准确率 $0.975$）；玩具实例
+（$\gamma_0=4$，带符号）准确率 $1.000$。
+
+\paragraph{shift\_regression（频域 WLS）} 响应 $z=y+\varepsilon\,(c*s)$。
+在环的谱基下挑战—移位算子可同时对角化，每个频率独立解
+\[
+\hat s_\nu=\frac{\sum_t w_t\,\overline{\lambda_t}_\nu\,z_{t,\nu}}
+               {\sum_t w_t^2\,|\lambda_{t,\nu}|^2},
+\qquad
+s=\frac{1}{d}\operatorname{Re}\!\Big(Z\,\hat s\Big),
+\]
+其中 $w$ 为软标签、$\lambda$ 为挑战谱。按签名分块流式累加（$B,D_n$），
+内存 $O(L\,d)$。验证（\texttt{selftest.py} T1--T2）：两种环 $\times$
+带符号/无符号挑战的\emph{精确恢复恒等式}（无噪、已知 $\varepsilon$，
+最大误差 $\le10^{-13}$）；预言标签 + 掩码噪声的受控实验亦通过。
+由此得到\textbf{通用样本量定律}
+\[
+\sigma=\sqrt{\mathrm{Var}(y)/(\tau N)}\;,
+\]
+用 BiT 校准（$\gamma_1=1024,\tau=30$ 给出 $0.184\sqrt{10^6/N}$）与审计
+实测一致；玩具（$\gamma_1=256,\tau=19$）预测 $0.0536$ 对实测 $0.0575$
+（软标签权重解释小偏差）。
+
+\paragraph{quantized\_moment（量化矩算子）} 第一时刻经公开 MC 算子映射到
+$\hat R$；算子只依赖 $(d,\tau,\text{环})$ 公开常数，无需校准密钥。
+v3 明确其推导范围：\emph{无符号负循环族}有闭式
+$\mathbb{E}[C^\top C]=\tau I+\rho(K_{mv}-dI)$（数值验证相对误差
+$\le0.008$，对生产算子 $0.0024$）；其余组合（带符号挑战、循环环）
+\textbf{尚未推导}——\texttt{build\_operator} 抛出
+\texttt{NotImplementedError}，\texttt{check\_applicability} 拒绝该通道。
+宁可拒绝，不给未验证的算子。
+
+\section{迁移验证：Dilithium 风格玩具实例（Demo 5--6）}
+
+\texttt{dlt\_toy()} 与 BiT-128 的差异是全方位的：循环环
+$\mathbb{Z}_q[x]/(x^d-1)$、$q=8380417$（Dilithium 素数，$16\mid q-1$
+保证 16 分解可逆）、$d=128$、$\tau=19$、\textbf{带符号挑战}
+（$\pm1$ 等概率）、$\gamma_0=4$、$\gamma_1=256$、$K=L=1$、只声明其
+结构实际拥有的两个通道（无 hint）。除规范外\textbf{没有任何一处代码
+改动}——模拟器（\texttt{simulate.py}）同样只读规范。
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+环节 & 结果 & 判定 \\
+\midrule
+诊断（共享潜变量实例） & split-half $+0.991$ / 对照 $-0.009$ & 检出所测统计量信号 \\
+诊断（块间符号解耦变体） & $+0.037$ / 对照 $+0.005$ & 第 2 类：当前数据未检出 \\
+$z_1$ 估计 & $\sigma=0.0575$ @ $N{=}200$k（预测 $0.0536$） & $\checkmark$ \\
+解码 & rounding 一次通过 & $\checkmark$ \\
+公开自证 V1--V3 & 全部通过，\texttt{key\_valid=True} & $\checkmark$ \\
+{[SCORING]} $s_0$ 精确 & $128/128$ & $\checkmark$ \\
+{[SCORING]} 等价密钥 & $R$ 与真值逐坐标相等 & $\checkmark$ \\
+{[SCORING]} 原始密钥 & \texttt{False}（见下） & 预期行为 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\texttt{original\_key\_exact=False} 不是缺陷而是\textbf{等价类语义}的
+体现：恢复的 $R$ 与真值完全一致，等价密钥规则
+$\hat b_0=\mathrm{clip}(R,-8,7)$、$\hat e=R-\hat b_0$ 在 $R$ 的中间区域
+选取的是与原始 $(e,b_0)$ 同一等价类的另一个代表——能产生可通过原
+验证器签名的密钥不唯一，恢复目标是\textbf{等价类}，与 BiT-128 主审计
+口径一致。
+
+\section{数据量级无关契约与体积扫描（Demo 7）}
+
+契约：\texttt{run()} 在任意 $N$ 返回结构化报告。解码失败时输出
+（i）逐坐标统计区间（$x\pm3\sigma_{\mathrm{cert}}$）与字母表盒
+$[\mathrm{rint}(x)-1,\mathrm{rint}(x)+1]$（附越界概率上界
+$2n\,\bar\Phi(1.5/\sigma_{\mathrm{cert}})$）；
+（ii）\texttt{required\_N\_decode}——\textbf{坐标误差目标语义}：把每
+坐标期望错误数压到 $\le12$ 所需的 $\sigma^*$ 反解出的 $N$（不是恢复
+成功率保证）；
+（iii）$\sigma$ 饱和标志（\S6）。窗口 MITM 加内存安全帽
+（$2^{\lceil W/2\rangle}\times$NC 表 $\le512$ MB $\Rightarrow W\le46$），
+推荐窗口超帽时降级尝试并报告边际风险。
+
+玩具实例扫描：
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}rrllll@{}}
+\toprule
+$N$ & $\sigma_{\mathrm{pub}}$ & $\sigma_{\mathrm{true}}$ & 解码阶段 & 状态 & $s_0$ 精确 \\
+\midrule
+2\,500  & 0.2609 & 0.5020 & ---         & 仅区间 & --- \\
+5\,000  & 0.2753 & 0.3483 & ---         & 仅区间 & --- \\
+10\,000 & 0.2336 & 0.2433 & MITM        & 恢复   & True \\
+25\,000 & 0.1522 & 0.1522 & rounding    & 恢复   & True \\
+50\,000 & 0.1065 & 0.1065 & rounding    & 恢复   & True \\
+100\,000& 0.0799 & 0.0799 & rounding    & 恢复   & True \\
+200\,000& 0.0575 & 0.0575 & rounding    & 恢复   & True \\
+400\,000& 0.0389 & 0.0389 & rounding    & 恢复   & True \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+$\log\sigma$ 对 $\log N$ 拟合指数 $-0.497$（期望 $-0.5$）；
+\texttt{required\_N\_decode} 按定律应为常数，实测均值 $3\,086$，
+经验解码边界落在 $(5\mathrm{k},10\mathrm{k}]$，与预测量级一致。
+$\sigma_{\mathrm{pub}}$（= $\max$ 两个公共代理）与 $\sigma_{\mathrm{true}}$
+在 $N\ge10$k 后完全吻合；小 $N$ 处的偏差正是 \S6 的折叠饱和
+（已加标志与下界语义——诚实降级而非错误）。
+
+\section{新发现：公共 $\sigma$ 代理的折叠饱和}
+
+$\sigma$ 的公共估计只能来自残差 $r=x-\mathrm{rint}(x)$ 的分布。
+但映射 $x\mapsto x-\mathrm{rint}(x)$ 把实轴折叠到 $[-\frac12,\frac12]$：
+$\sigma\gtrsim0.5$ 后折叠分布已接近均匀（$\mathrm{std}\to0.289$），
+\textbf{任何}基于残差的公共估计器此后都不可辨识——信息论层面的限制，
+不是实现缺陷。实测：$\sigma_{\mathrm{true}}=0.499$ 时
+$\sigma_{\mathrm{full}}=0.298$。
+v3 的处理：$\sigma_{\mathrm{cert}}=\max(\sigma_{\mathrm{conf}},\sigma_{\mathrm{full}})$
+取保守值；$\sigma_{\mathrm{full}}\ge0.27$ 时置 \texttt{sigma\_saturated}
+标志，\texttt{required\_N} 标注``下界''语义，区间退到字母表盒并附
+越界概率上界。
+\emph{注意：这只影响解码失败时的报告语义；解码本身的成功判定
+（razor + V1--V3）不受影响。}
+
+\section{保持不变的已验证结论（v2 口径）}
+
+以下结论原文保留、不重复实验：直接估计传递的局限（三种测试过的融合
+方法无收益；联合推断的其他形式开放）；可辨识性账本（$s_0$ 点态可辨识、
+$(e,b_0)$ 仅等价类可辨识、$\varepsilon_n$ 为混杂潜变量）；诊断的分离
+能力（易受 $+0.747$ 对对照 $0.000$；块间解耦 $-0.020$ 对 $+0.002$）；
+错位定律限定（在所测估计器与解码器族内观察）；跨密钥零信号（500 密钥
+全电池随机水平）；4--8$\times$ 似然增益仍为\textbf{待复核}。
+
+\section{真实 NICCS 候选实例测试（v4 新增）}
+
+v3 的迁移验证用的是玩具实例。v4 把框架对准\textbf{真实 NICCS 候选的提交者
+参考实现}：从 34 个签名候选中筛出全部属于 FS-with-aborts 模格家族的
+5 个（CS、COMPASS-SIG、Aigis-Sig+、Rhyme、shuttle），选取结构上最有信息量的两个：
+
+\begin{itemize}
+  \item \textbf{CS-128}（正例候选）：BLISS 式\textbf{分块双模符号位}——
+        每条签名 $\tau{=}23$ 个挑战位置分为 6 块 $(4,4,4,4,4,3)$，每块
+        独立抽取一个随机位 $b_i$，响应 $z_0=y_0+\sum_i\varepsilon_i c_i$、
+        $z_j=y_j+\sum_i\varepsilon_i(c_i{\ast}s_j)$（$\varepsilon_i=(-1)^{b_i}$）。
+        这正是共享潜变量泄漏模型的\textbf{分块推广}。
+  \item \textbf{COMPASS-SIG-128}（阴性对照）：教科书式 Dilithium 克隆，
+        $z=y+c{\ast}s_1$，无任何双模位。
+\end{itemize}
+
+两个实现都在提交者参考代码上加了 dump 插桩（cs.c/sampling.c、sign.c），
+生成真实数据集：CS-128 20 万条（6192 B/行）、COMPASS 10 万条
+（4384 B/行）。插桩 dump 的系数向量与公开签名内容等价（rANS/位打包
+为无损编码；Python 解码器属移植练习，非信息边界）。全部公开侧计算
+只用 dump 的公开字段；[SCORING] 臂才使用 oracle 字段。
+
+\subsection{CS-128：结构存在，公开信息为零——框架正确拒绝}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+测量 & 结果 & 判定 \\
+\midrule
+代数恒等式 & $z_1 = y_1 + c'{\ast}s$ 逐系数精确成立 & 逆向工程正确 \\
+{[SCORING]} oracle 符号回归 & $\sigma=0.3086$ @200k（定律 $0.3082$） & $\sigma$ 律 0.1\% 吻合 \\
+{[SCORING]} 完美标签所需 N & $75{,}966$ 条 & 结构上一步之遥 \\
+公开标签通道（掩码先验 LUT） & 准确率 $0.5258$，corr $+0.066$ & 近乎为零 \\
+公开边缘 LUT（直方图） & 准确率 $0.5027$ & 零 \\
+\textbf{assay A1（公开，半分相关）} & $-0.0002$（零假设 $+0.0005$，se $0.0009$） &
+\textbf{labels\_uninformative} \\
+软标签回归半分相关 & $+0.035$ & 无信号 \\
+{[SCORING]} 给定真 $s$ 的符号辨识 & $49.7\%$--$50.1\%$ & 条件分布对称 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+结论：CS-128 \textbf{存在}分块共享潜变量（oracle 验证），且若有标签
+$7.6$ 万条即可恢复——但 BLISS 式对称接受采样把发布边缘分布条件化成
+对 $\varepsilon$ \emph{对称}（给定真密钥时辨识度仍 50\%），公开信息
+在测量精度内为零。框架的 assay（数据驱动的适用性闸门）正确判定
+``标签无信息''并\textbf{拒绝}标签依赖路线，报告拒绝理由而非给出
+垃圾结果。\textbf{该方案的安全性完全押在接受采样的对称性上}：任何
+泄露部分 $\varepsilon$ 的实现缺陷（偏置 DRNG、重启计数侧信道）都会
+把界拉回 $7.6$ 万条。
+
+\subsection{COMPASS-SIG-128：无潜变量，掩码受限}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}rll@{}}
+\toprule
+$N$ & $\sigma_{\mathrm{true}}$ & 定律 $\sqrt{\mathrm{Var}(y)/\tau N}$ \\
+\midrule
+10\,000 & $35.04$ & $34.51$ \\
+50\,000 & $15.54$ & $15.44$ \\
+100\,000 & $10.83$ & $10.91$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+$\gamma_1=2^{15}$ 均匀掩码（$\mathrm{Var}(y)=3.58\times10^8$）把
+$\sigma=0.5$ 的需求推到 $N\approx4.8\times10^7$；半分相关 $-0.038$
+（无信号）。框架诚实输出``无潜变量、掩码受限、不承诺任何现实规模
+的恢复''。
+
+\subsection{三实例对照：框架的判定矩阵}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+实例 & 潜变量 & 公开标签信息 & 框架判定 \\
+\midrule
+BiT-128 & 有（单符号） & 96.2\% & 恢复（4M/175k 闭合） \\
+DLT-toy & 有（单符号） & 100\% & 恢复（迁移验证） \\
+CS-128 & 有（6 分块） & $\approx 0$（assay 拒绝） & 拒绝 + oracle 界 75,966 \\
+COMPASS-128 & 无 & —— & 掩码受限 $4.8\times10^7$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+这正是``数据量级无关契约''的完整语义：同一套引擎，四种输入 régime，
+四种诚实输出，无一种需要先验知道数据量级或方案身份。
+
+\subsection{框架 v4 的新机制（由真实测试驱动）}
+
+\begin{enumerate}
+  \item \textbf{分块潜变量通道}（\texttt{chunked-signs}）：spec 声明
+        \texttt{chunk\_sizes}；标签通道按块聚合 LLR（\texttt{run\_chunked}）；
+        回归通道的有效设计 $\lambda_{\mathrm{eff}}=\sum_i w_i\lambda_{c_i}$
+        （\texttt{accumulate\_chunked}）。selftest T7 验证 oracle 符号下
+        的精确恢复恒等式。
+  \item \textbf{经验掩码模型}（\texttt{MaskModel(kind="empirical")}）：
+        掩码 pmf 以测量表声明（CS 的接受条件化掩码从公开数据非挑战位
+        直接测得），LUT 按表值网格构建。
+  \item \textbf{潜变量信息测定}（\texttt{assay.py}）：数据驱动的适用性
+        闸门——标签证据半分相关 + 零假设水平 + 每潜变量比特数；
+        ``结构存在''与``公开可利用''分离判定。selftest T8 验证：
+        窄掩码合成数据 $\to$ labels\_informative（corr $+0.63$），
+        宽掩码 $\to$ labels\_uninformative。
+\end{enumerate}
+
+\subsection{诚实边界（v4 明确不声称的）}
+
+CS-128 的结论限定于\textbf{本框架实现的路线族}（标签 + 线性回归 +
+一阶矩 + 约束解码）：assay 测不到标签信息 $\neq$ 数学上不存在任何
+利用 $\varepsilon$ 的公开数据攻击（高阶矩、接受事件与 $\varepsilon$
+的更精细耦合未被穷尽）——但二阶矩路线的样本量估计（$\sim10^8$，
+掩码方差主导）已在审计中排除。COMPASS 的 $4.8\times10^7$ 是坐标误差
+目标语义，不是恢复成功率保证。两个实例的 dump 系数向量与公开签名
+等价的论证以 rANS/位打包的无损性为据；完整 Python 签名字节解码器
+尚未移植（不影响本文全部结论的信息论语义，影响的是``攻击者只拿
+签名文件''的工程口径）。
+
+
+\section{诚实边界的解决（v5）}
+
+v4 报告列出的每一条``明确不声称''，本版逐条给出解决或量化闭合。
+
+\subsection{B4a：带符号挑战的矩算子——已推导（正面结果）}
+
+\textbf{引理（v5）}：挑战系数为独立均匀 $\pm1$ 时（Dilithium 族、CS-128、
+DARTS），互位置交叉项带因子 $\mathbb{E}[\mathrm{val}_t\,\mathrm{val}_{t'}]=0$
+（$t\neq t'$），故
+\[
+\mathbb{E}[C^\top C] = \tau I \qquad\text{（带符号挑战，环无关）}.
+\]
+数值验证 $(d,\tau)\in\{(64,10),(128,20),(256,30)\}$：与 $\tau I$ 的偏差
+在 MC 噪声水平（约 1.5\%），无符号闭式被拒绝（54--72\%）。
+\textbf{后果}：tent 核场耦合项\emph{消失}——带符号挑战方案的一阶矩系统
+是纯对角的（无需去模糊，$\mathrm{Fop}=0$）。v3 的拒绝条款升级为``已推导
+且更简单''；BiT 式去模糊是无符号族特有的。闸门与
+\texttt{build\_operator} 同步更新（selftest T4/T6 改测新语义）。
+
+\subsection{B-fold：$\sigma$ 折叠饱和——公开掩码定律回退}
+
+折叠饱和（$\sigma\gtrsim0.3$ 后 $x-\mathrm{rint}(x)$ 不可辨识）不影响
+\textbf{定律}值：$\sigma_{\mathrm{law}}=\sqrt{\mathrm{Var}(y)/\tau N}$，
+其中 $\mathrm{Var}(y)$ 来自声明/测量的掩码模型（方案级公开常数）。
+管线在 \texttt{sigma\_saturated} 时自动取
+$\sigma_{\mathrm{cert}}=\max(\text{残差代理},\ \sigma_{\mathrm{law}})$。
+
+\subsection{B2：required\_N 的双语义——两组数都给出}
+
+解码目标 $\sigma^*=0.5/\Phi^{-1}(6/n)$（$n$ 坐标、期望错误 $\le12$）：
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+实例 & 坐标语义（$\sigma=0.5$） & 解码语义（$\le12$ 期望错误） \\
+\midrule
+CS-128（完美标签） & $7.60\times10^4$ & $4.83\times10^5$ \\
+COMPASS-128 & $4.77\times10^7$ & $3.03\times10^8$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{B3：Python 签名字节解码器——已移植并整包验证}
+
+纯 Python 公开解码（\texttt{public\_decoders.py}），对打包签名字节逐条
+验证（各 200/200 全对）：
+
+\begin{itemize}
+  \item \textbf{CS-128}（1548 B/签名）：rANS 熵解码（223/89/7 符号表，
+        $L=2^{23}$，前向字节消费 + 终态校验）；z$_1$ 低 6 位位打包；
+        \textbf{SM3 CTR-DRNG 完整移植}（SP800-90A 型，SEEDLEN=55：df/
+        实例化/生成 + 55 字节大数状态更新）+ SampleInBall 移植
+        $\to$ 挑战从 c$\sim$ 重建。
+  \item \textbf{COMPASS-128}（2080 B/签名）：16 位 LE z 解包 +
+        SampleInBall 移植。\textbf{发现}：其``shake256'' API 实为
+        \emph{SM3-pseudoXOF 换皮}（symmetric-shake.c 调 pseudoXOF），
+        非 Keccak——解码器按此实现后全对。
+\end{itemize}
+
+至此``攻击者只拿签名文件''的工程口径闭合：攻击消费的每个量都可从
+签名字节 + 公钥纯 Python 推导。
+
+\subsection{B1：CS-128 潜变量信息——精确模型量化闭合（核心）}
+
+v4 边界：``assay 测不到 $\neq$ 数学不存在''。v5 从 sampling.c 逆向出
+\textbf{精确接受模型}（掩码先验的解析 pmf（Irwin-Hall 卷积）+ BLISS 式
+接受指数检验 + 分块 norm 指示），计算每签名精确对数似然比
+（\texttt{cs\_exact\_llr.py}，oracle 臂，$n{=}10^4$）：
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+量 & 值 \\
+\midrule
+全翻转精确 LLR（连续部分） & $+0.180\pm0.023$ nats/签名（$8.0\sigma>0$） \\
+分块翻转 LLR 均值 & $+0.023$ 至 $+0.050$ nats/块 \\
+确定性揭示（norm 边界杀死翻转假设） & $0.19\%$/块（约 $1.15\%$ 签名有 $\ge1$ 块确定） \\
+隐含最优分类器（Chernoff 式估计） & 约 $60\%$/块 \\
+隐含 required\_N（最优分类器，坐标语义） & 约 $1.8\times10^6$ \\
+实际可达（公开 LUT 52.6\%，$w\approx0.05$） & 约 $3\times10^8$ \\
+完美标签下界 & $7.6\times10^4$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+结论升级：潜变量信息\textbf{非零}（对称接受并非完美对称——$F_i$ 项破坏
+它），但被精确量化：即使拿到\emph{最优}逐签名分类器，回归也需要
+约 $2\times10^6$ 条（解码语义约 $1.2\times10^7$）；实际可实现的
+分类器把界推到约 $3\times10^8$。``拒绝''从定性变为带数字的定量边界。
+
+\paragraph{实现层偏离记录（附带发现）}
+参考实现的 $C{+}E$ 合并对齐移位 $E\gg(b_C-b_E)$ 在指数差 $\ge64$ 时为
+未定义行为（x86 移位量取 mod 64）；实测指数差达约 500。后果：第 5 块
+（对齐良好）我们的模型与 C 的接受指数\textbf{逐位一致}（$+0.9304$ 对
+$+0.9302$），0--4 块存在偏差——即参考实现的实际接受分布偏离其设计意图。
+该偏离不破坏签名正确性（验证器不检查接受值），只扰动发布分布；本节
+信息界按\emph{设计意图}模型给出，实现偏离作为未建模层记录。
+
+\subsection{v5 后的诚实边界（更新版）}
+
+已闭合：带符号矩算子（推导+验证）；折叠饱和（定律回退）；双语义
+required\_N；公开字节解码（整包验证）；CS-128 潜变量信息（精确量化，
+非零但 $\ge 2\times10^6$）。
+仍开放：(i) CS-128 实现偏离层（C+E 对齐 UB）对信息界的修正方向与幅度
+未建模——需要按位复刻 UB 移位语义；(ii) 高于一阶的矩通道（二阶矩样本
+量约 $10^8$ 已排除，更高阶未穷尽）；(iii) e-部发布量 z$_2$ 的量化一致
+性因子未计入精确 LLR（对称项，量级可忽略的论证未形式化）。
+
+\section{后续边界的多轮解决（v6）}
+
+v5 留下的三条开放边界（实现偏离层、高阶矩、z$_2$ 一致性）与路线图上的
+真实 Dilithium 实例，本版逐轮解决。其中包含一次对 v5 结论的
+\textbf{显式更正}。
+
+\subsection{更正：v5 的``对齐移位 UB''是审计工具自身的打印错位}
+
+v5 记录``参考实现 C+E 合并的对齐移位在指数差 $\ge64$ 时为 UB，实测指数
+差达 $\sim$500''。v6 复查发现：该``指数差 $\sim$500''来自我们的插桩
+\texttt{printf} 格式串与参数错位（11 个说明符对 10 个参数，\%llu 读到
+int 槽位的高位垃圾）。修正打印后重测：全部 472 个捕获的接受检验中
+$\max|b_A|=1$、$\max|b_C-b_E|=2$——\textbf{UB 从未触发}。撤回该声称；
+教训记入审计方法（插桩输出必须先通过格式对账）。
+
+\subsection{R1（边界 i）：实现偏离层已按位闭合——信息界不变}
+
+排除了 UB 后，实现与设计意图的真实偏离只剩\textbf{定点舍入}（每次
+乘法保留 64 位尾数，$\sim$4600 次累乘）。我们把整个定点算术
+（\texttt{cs\_fixedpoint.py}：乘法/移位/\texttt{Approx}/C+E 合并/指数
+检验）\textbf{按位移植}，对参考二进制的插桩捕获逐块校准：接受检验的
+A、B、b$_A$、b$_B$、C、F 全部 240/240 位精确。
+
+在此``实际实现''模型下重测信息界（N=500）：
+\[
+\text{全翻转精确 LLR} = +0.182\pm0.028 \ \text{nats/签名}
+\quad\text{（意图模型 } +0.180\pm0.023\text{）}.
+\]
+\textbf{定点舍入不改变信息界}。接受模型中不再有未建模层——边界（i）
+闭合。
+
+\subsection{R2（边界 iii）：y$_2$ 层的形式化与严格下界通道}
+
+精确似然中，y$_0$/y$_1$ 被 (z$_0$,z$_1$) 在每个假设下钉死（无边缘化
+问题），但 y$_2$ 只被 z$_2$ 量化约束——翻转假设的 y$_2$ 必须边缘化，
+plug-in（取特定实现）只是括号近似。v6 给出两层报告：
+
+\begin{itemize}
+  \item \textbf{严格通道}：(z$_0$,z$_1$)-精确信息（只含 fre$_0$/fre$_1$
+        接受因子、y$_0$/y$_1$ 范数、LP$_0$/LP$_1$ 先验）=
+        $+0.122\pm0.032$ nats/签名（N=250）——信息量的严格可用部分；
+  \item \textbf{plug-in 全通道}：$+0.18$（v5）——y$_2$ 层的贡献上侧
+        括号。z$_2$ 量化一致性：单元宽 1008 对掩码支撑宽 3800，连续
+        因子 $\approx1$，仅支撑边缘贡献确定性揭示（并入已测
+        0.19--0.5\%/块）。
+\end{itemize}
+
+\subsection{R3（边界 ii）：二阶矩通道精确关闭（4$\times$10$^{10}$）}
+
+奇数阶矩恒为零（$\mathbb{E}[\varepsilon^{\text{odd}}]=0$）。信息量最低
+的存活统计量是跨块二阶乘积
+$\mathbb{E}[\dot z_j\dot z_{j'}^*]=\hat s_j\hat s_{j'}^*\,\bar S_\nu$
+（携带相对相位；oracle 臂验证公式残差 0.4\%）。从审计数据实测估计量
+方差后代入：
+\[
+\text{required\_N}(20\%\ \text{相对精度}) = 4.0\times10^{10}\ \text{（中位）},\quad
+4.7\times10^{12}\ \text{（p90）}.
+\]
+比 v4/v5 的粗估（$\sim$10$^8$）还差两个数量级——二阶矩路线\textbf{精确
+关闭}。更高偶阶矩的掩码噪声标度严格更差（论证，未形式化）。
+
+\subsection{R4：真实 Dilithium-2 参数实例（判定矩阵第五行）}
+
+\texttt{dilithium2()}：FIPS-204 ML-DSA-44 几何（$q{=}8380417$、
+$d{=}256$、$K{=}L{=}4$、$\tau{=}39$、$\gamma_1{=}2^{17}$、$\eta{=}2$、
+带符号挑战）。稀疏 w$_1$-hint 通道\textbf{不声明}（其观测模型与 BiT 式
+量化 hint 不同，未推导——适用纪律优先）。合成转录 50k：
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+量 & 实测 & 定律 \\
+\midrule
+$\sigma_{\mathrm{true}}$ @50k & $55.9$ & $54.2$ \\
+required\_N($\sigma{=}0.5$) & \multicolumn{2}{l}{$5.87\times10^8$} \\
+半分相关 & \multicolumn{2}{l}{$+0.008$（无信号，符合预期）} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+（过程中修复模拟器三处：int16 溢出——$\gamma_1{=}2^{17}$ 的掩码需
+int32；``none'' 潜变量不再乘 $\varepsilon$；掩码类型
+uniform/empirical 按 spec 声明采样。）
+
+\subsection{五实例判定矩阵（v6 终态）}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+实例 & 潜变量 & 公开标签信息 & 框架判定 \\
+\midrule
+BiT-128 & 有（单符号） & 96.2\% & 恢复（4M/175k 闭合） \\
+DLT-toy & 有（单符号） & 100\% & 恢复（迁移验证） \\
+CS-128 & 有（6 分块） & $\approx$0（assay 拒绝） & 拒绝 + 定量界（见下） \\
+COMPASS-128 & 无 & —— & 掩码受限 $4.8\times10^7$ \\
+Dilithium2-real & 无 & —— & 掩码受限 $5.9\times10^8$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+CS-128 的定量界（v6 终态，三层）：
+\begin{itemize}
+  \item 严格 (z$_0$,z$_1$) 通道：$0.122\pm0.032$ nats/签名；
+  \item plug-in 全通道（实际实现 = 意图实现）：$0.182\pm0.028$；
+  \item 隐含最优分类器 $\approx$60\%/块 $\to$ required\_N
+        $\approx1.8\times10^6$（坐标语义）；实际可达（52.6\% LUT）
+        $\approx3\times10^8$；完美标签下界 $7.6\times10^4$。
+\end{itemize}
+
+\subsection{v6 后的诚实边界（更新版）}
+
+已闭合：接受模型的实现层（位精确，信息不变）；(z$_0$,z$_1$) 严格通道
+信息；二阶矩路线（$4\times10^{10}$，精确）；Dilithium-2 实例。
+仍开放：(i) y$_2$ 层的边缘化似然（被 $[0.122, 0.182]$ 括号；
+边缘化需要单元测度的卷积计算或数值积分）；(ii) $\ge$4 阶偶矩的标度
+论证未形式化（二阶已关闭两数量级余量，更高阶更差）；(iii) Dilithium
+式稀疏 hint 的观测模型未推导（带符号引理使其场部分为零，但稀疏
+似然本身是新的数学对象）。
+
+\section{十轮迭代（v7--v16）}
+
+\subsection{v7：y$_2$ 边缘化精确计算 + 对 v5/v6 信息量的修正}
+
+z$_2$ 变换逐位移植（对真实 dump 验证 \textbf{768/768} 精确复现；途中修三处：
+$e-t_0$ 符号、A 的 Montgomery 因子 $2^{-32}\bmod q=23435$、ground/dump 必须
+同次运行配对）。边缘化按支撑枚举精确计算。\textbf{修正}：v5/v6 的
+``0.18 nats''只是 (z$_0$,z$_1$)+接受因子部分；计入 z$_2$ 后\emph{给定密钥}
+的 $\varepsilon$ 信息为 $25.6\pm16.8$ nats/签名（P(LLR$>$0)$=$0.95），分块
+重尾（p75 $\approx$ 670 nats——四分之一的翻转被 z$_2$ 大幅排除）。
+公开侧信息不变（assay $\approx$0）——冷启动壁垒不动，但信息分类学修正为
+三层：公开 $\approx$0 / (z$_0$,z$_1$) 给定密钥 0.12 / 全数据给定密钥 $\approx$25。
+
+\subsection{v8：偶矩层级精确关闭}
+
+四阶跨块统计量实测：required\_N $=1.9\times10^{20}$（中位）、
+$1.5\times10^{24}$（p90）——比二阶（$4\times10^{10}$）差约 10 个数量级。
+偶矩每升 2 阶、N 恶化 $\sim$10 个数量级（掩码方差主导），实证封闭。
+
+\subsection{v9：shuttle 结构判定（第三类潜变量）}
+
+读参考实现（irs.c）：存在\textbf{真隐藏潜变量}——确定性归一化翻转
+（当且仅当 $\langle z_{\text{partial}},v\rangle\le0$，$v$ 为旋转拉伸秘密）
+外加秘密 IRS 标志位，每签名 $\tau{=}42$ 个隐藏位；设计声称无拒绝 IRS 使
+发布分布精确等于 $D_{\text{Gaussian}}$（分布级抹除）。框架新增
+\texttt{deterministic-normalization} 潜变量类；插桩测量待做。
+
+\subsection{v10--v11：Aigis 备注 + 高斯掩码机制}
+
+Aigis-Sig+ 属 Dilithium 族无潜变量（掩码受限），其稀疏 hint 观测模型
+未推导——与 Dilithium2 同口径。高斯掩码种类进框架；Rhyme 几何合成
+实例 oracle 符号 $\sigma$ 0.43 对定律 0.41。
+
+\subsection{v12：EM 冷启动——诚实的中断报告}
+
+首版 mean-field EM（k$\in\{0,50,200,768\}$ 侧信息坐标）\textbf{全部发散}
+——含 k$=$768 对照（应收敛），判定为装配 bug 而非壁垒测量。冷启动量化
+保持开放；oracle 臂（v14）给出的是壁垒的另一侧锚点。
+
+\subsection{v13：由 v6 定律回退覆盖（无增量）}
+
+\subsection{v14：oracle 解码闭环（本轮核心成果）}
+
+新 500k 真实 dump（新密钥）：oracle 分块标签 + 分块 WLS $\to$
+$\sigma=0.1925$（定律 0.195），5 个取整错误（margin 排名 2/3/14/19/27 全
+在窗内）$\to$ MITM(W=36) $\to$ \textbf{s$_0$ 768/768 精确恢复，R 盒通过}。
+``完美标签 $\Rightarrow$ 恢复''从计算预测变为实证。途中修解码阶梯两处
+BiT 硬编码（接受集与尾检查的 $\pm9$ $\to$ spec 的 r$_{\text{box}}$）；
+贪心陷阱（多列噪声平台）再次确认。
+
+\subsection{v15：spec 验收电池}
+
+\texttt{run\_spec\_battery(spec)}：适用性 $\to$ 合成转录 $\to$ 诊断 $\to$
+通道估计 $\to$ 判定，一条命令。六实例判定：BiT/DLT-toy 标签可用；
+COMPASS 模拟器不兼容（K$\ne$L 平方关系限制，如实报告）；Dilithium2
+掩码受限 $5.9\times10^8$（$\sigma$ 88.7 对定律 85.7）；Rhyme 无标签通道
+（冷启动壁垒）；shuttle 结构性拒绝。
+
+\subsection{v16 更正与开放项}
+
+更正：两份审计 dump 的 A 均为原始 INTT 输出（需 $\times23435$），v6 的
+部分 z$_2$ 电池曾在错 A 下运行（已全部重跑修正）；插桩输出格式对账教训
+第二次记录。开放：EM 冷启动装配修复；shuttle 插桩测量；Aigis/Dilithium
+稀疏 hint 观测模型；(z$_0$,z$_1$) 通道的最优\emph{公开}分类器gap
+（52.6\% 实测 对 60\% 理论上界）。
+
+\section{边界与下一步}
+
+\textbf{本版明确不声称的}：矩算子对带符号挑战/循环环的推导（闸门拒绝）；
+对非 FS-with-aborts 家族（哈希签名等）的适用（无谱基，闸门拒绝）；
+``任意数据量都能恢复''（数据不足时输出的是区间与需求，不是候选）；
+对真实参数方案的可扩展性（迁移实例为玩具规模，$d{=}128$、$L{=}1$）。
+
+\begin{askbox}[征求建议]
+（1）带符号挑战的矩算子：BiT 的 hint 论证式依赖``全 $+1$ 挑战 + 单比特
+双模翻转''；$\pm1$ 挑战下第一时刻的确定性泛函形式需要重新推导——值得
+作为下一个数学目标吗？（2）迁移实例目前是玩具规模；是否值得把
+\texttt{dlt\_toy} 升级为真实 Dilithium 参数的公开数据实验（需先解决
+Dilithium 的 $w_1$ 打包与挑战分布细节）？（3）折叠饱和的补救：多级
+量化通道（如 hint 的 7 级量化）不受折叠限制——是否应把``第二通道''
+作为低数据区的标准配置？
+\end{askbox}
+
+\section{附：自测与演示清单（全部可复跑）}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+对象 & 内容 & 结果 \\
+\midrule
+\texttt{selftest.py} T1 & 卷积约定 $=$ 关系矩阵（两环） & PASS \\
+\texttt{selftest.py} T2 & 回归精确恢复恒等式（四组合） & PASS \\
+\texttt{selftest.py} T3 & 标签 LUT（BiT 网格 + 带符号） & PASS \\
+\texttt{selftest.py} T4 & 矩算子 vs 闭式；出范围拒绝 & PASS \\
+\texttt{selftest.py} T5 & 模拟密钥生成满足公开关系 & PASS \\
+\texttt{selftest.py} T6 & 适用性闸门接受/拒绝 & PASS \\
+\texttt{selftest.py} T7 & 分块通道精确恢复恒等式（CS 式） & PASS \\
+\texttt{selftest.py} T8 & assay 判定（informative/uninformative） & PASS \\
+Demo 1--2 & BiT-128 工件复现（hint@1.5M、z$_1$@175k） & 768/768 \\
+Demo 3--4 & BiT 诊断（易受 / 块间解耦） & $+0.747$ / $-0.020$ \\
+Demo 5 & \textbf{迁移}端到端（循环环 + 带符号挑战） & 等价密钥恢复 \\
+Demo 6 & \textbf{迁移}诊断 & 正确分类 \\
+Demo 7 & \textbf{体积扫描} + 契约演示 & $\sigma\propto N^{-1/2}$ \\
+Demo 8 & \textbf{真实 NICCS 实例}（CS-128、COMPASS-128） & 判定矩阵 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

@@ -1,0 +1,448 @@
+% !TEX program = xelatex
+% eprint 风格中文预印本 —— v3（按 2026-10-14 审阅意见修订）
+% 核心修订：max_beta=1754 归因、完整成本口径、撤回 fatigue 定性、
+%           逐参数集清单与容差、DTRU 因果收紧、文献更正
+\documentclass[11pt,a4paper,zihao=-4]{ctexart}
+\usepackage[top=2.5cm,bottom=2.5cm,left=2.6cm,right=2.6cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=bf}
+
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\bfseries 如何审计格方案的安全强度声称：来自 NICCS 四卷 KEM\\
+复现的三个教训\\[0.8em]
+\large\mdseries Auditing Claimed Security Strengths of Lattice KEMs:\\
+Three Lessons from Reproducing Four NICCS Submissions}
+\author{Jy L}
+\date{2026 年 10 月 15 日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent\textbf{摘要。}设计文档声称的安全强度与独立复现之间的差距
+常被当作单一事实使用，但差距的成因至少有三类，且修正路径完全不同：
+复现侧的\textbf{输入还原}误差、估算工具的\textbf{搜索域限制}、以及
+\textbf{成本口径}的不完整。本文以 NICCS 四卷候选 KEM（FLIT、ZEN、
+NEV、DTRU）推荐的 14 套参数为对象，用各方案引用的工具
+（\code{lattice-estimator} 于其指定 commit、Kyber
+\code{security-estimates} 脚本）完成一次以差距为中心的审计，
+并给出三个量化教训。\textbf{教训一（输入还原）}：四类输入误读
+——分布记号歧义、参数表结构误读、分布族近似、$\sigma$ 侧选错——
+分别造成 $13\sim26$、$\ge 170$、$13\sim29$、$13\sim41$ bits 的
+伪差距；我们首轮复现报告的 $-18\sim-44$ bits「系统性差距」
+主要是这些误读的叠加。\textbf{教训二（搜索域）}：
+\code{lattice-estimator} 默认搜索上限为
+$\beta \le \texttt{max\_beta}{=}1754$（源码注释：对应至多 512-bit
+安全等级）；14 套参数中 6 套的声称值高于该等级，默认配置下
+返回 \code{rop}$=\infty$，易被误读为「声称不可行」。仅在进程内
+将上限提至 2200（不改源码），Flit-512（$\beta{=}1885$，$\log_2
+\code{rop}{=}550.42$，与声称 550.4 一致）、ZEN-512 NTRU
+（1802，526.18 vs 526.2）、NEV-R3（1999，583.7 vs 583）即由
+优化器直接复现。\textbf{教训三（完整成本）}：混合攻击的成本
+是完整 \code{rop}（含猜测/FFT/重复项），不是 $0.292\beta$ 的
+块大小基础值——ZEN-512 RLWE 面按完整成本与声称仅差
+$\approx 4.1$ bits，而非我们此前误算的 21.5 bits。
+修正全部口径后：14 套参数中 13 套与公共工具一致（容差内；
+其中 5 套 $\beta$ 精确一致），唯一实质残差是 DTRU-648 的
+15.7 bits 未解释差异（将输入 $\sigma^2$ 从 1 改为 2 可得
+163.8$\approx$声称 164，但数值反解不具唯一性，不作因果结论）。
+文中所有比较按方案自身口径逐面进行，不做跨方案排序；
+文末给出可复核的配置与产物清单。
+\\[0.6em]
+\noindent\textbf{Abstract.} A gap between a scheme's claimed security
+strength and an independent reproduction can arise from at least
+three causes with entirely different remedies: input-restoration
+errors on the reproducer's side, search-domain limits of the
+estimation tool, and incomplete cost accounting. Reproducing the 14
+recommended parameter sets of four NICCS KEM submissions (FLIT,
+ZEN, NEV, DTRU) with their own referenced tools, we quantify three
+lessons. \emph{Lesson 1 (inputs):} four classes of misreading
+---notation ambiguity, table-structure misreading, distribution
+approximation, wrong $\sigma$ side---produce spurious gaps of
+$13$--$26$, $\ge 170$, $13$--$29$ and $13$--$41$ bits; the
+$-18$ to $-44$-bit ``systematic gap'' of our own first pass is
+mostly their superposition. \emph{Lesson 2 (search domain):} the
+lattice-estimator caps its search at \code{max\_beta}${}=1754$
+(source comment: security levels of at most 512 bits); six of the
+14 sets claim above that level and return \code{rop}$=\infty$
+under default settings, easily misread as infeasibility of the
+claims. Raising the cap to 2200 in-process (no source change)
+reproduces Flit-512 ($\beta{=}1885$, $\log_2$\code{rop}${}=550.42$
+vs claimed 550.4), ZEN-512 NTRU (1802, 526.18 vs 526.2) and NEV-R3
+(1999, 583.7 vs 583) directly via the optimizer. \emph{Lesson 3
+(full cost):} a hybrid attack costs its full \code{rop} (guessing,
+FFT, repetitions), not the $0.292\beta$ block-size floor; ZEN-512's
+RLWE face differs from its claim by only $\approx 4.1$ bits under
+full cost, not the 21.5 bits we first computed. After all
+corrections, 13 of 14 sets agree with the public tools within
+stated tolerances (five with exact $\beta$); the sole substantive
+residual is a 15.7-bit unexplained discrepancy for DTRU-648
+(input $\sigma^2{=}2$ yields $163.8\approx$ the claim 164, but
+numerical inversion is non-unique and no causal claim is made).
+All comparisons follow each scheme's own caliber per attack face;
+no cross-scheme ranking is attempted. A reproducible artifact
+list is included.\\[0.6em]
+\noindent\textbf{关键词。}格密码；安全强度估算；可复现性；
+审计方法；NTRU；RLWE；NICCS\\[0.2em]
+\noindent\textbf{Keywords.} lattice cryptography; concrete
+security; reproducibility; audit methodology; NTRU; RLWE; NICCS
+\end{abstract}
+
+\section{引言}
+
+NICCS 候选 KEM 的安全强度声称值由外部工具生成
+（\code{lattice-estimator} 指定 commit、Kyber
+\code{security-estimates} 脚本），估算代码不随包提供，独立复现
+因此成为评审的关键环节。但「复现有差距」这个观察本身几乎不含
+信息：差距可能来自复现侧输入还原、工具搜索域、成本口径或
+方案侧真实偏差。把成因搞错会导向错误行动——把工具限制当成
+方案缺陷，或把口径差当成攻击面。
+
+本文报告一次\textbf{以差距为中心}的完整审计，覆盖 FLIT、ZEN、
+NEV、DTRU 各自\textbf{推荐}参数集共 14 套（DTRU-Light/Prime、
+ZEN-light/backup、NEV 的 C/D 系列不在范围内；选择规则是各文档
+标记为推荐/主集者）。我们的贡献是三个可量化的教训与一套可
+复核的流程，而非新攻击或对任何方案安全性的否定：
+\begin{enumerate}[leftmargin=2em,itemsep=0.1em]
+\item 输入还原误差的 bit 级量化（\S\ref{sec:l1}），含我们自己
+      首轮复现的完整错误清单——这些误读在无随包脚本的条件下
+      极易发生；
+\item 工具搜索域限制的识别与影响（\S\ref{sec:l2}）：
+      \code{max\_beta} 上限使 $>512$-bit 声称默认返回
+      \code{rop}$=\infty$；提升上限后三处声称由优化器直接复现；
+\item 完整成本口径的必要性（\S\ref{sec:l3}）：以 ZEN-512 为例，
+      $0.292\beta$ 与完整 \code{rop} 相差 17.4 bits，直接决定
+      「差距 21.5」还是「差距 4.1」；
+\item 修正后的逐套清单（\S\ref{sec:inventory}）：13/14 一致
+      （5 套 $\beta$ 精确），唯一实质残差 DTRU-648；
+\item 可复核产物与配置（\S\ref{sec:artifact}）。
+\end{enumerate}
+
+本文不做跨方案安全等级横向比较（四方案口径互异，
+\S\ref{sec:l3}）；所有复现值均为估算层面，不构成实际攻击，
+也不提供任何「安全下界」——搜索截断与启发式模型预测
+不等价于安全性证明。
+
+\section{审计设置}
+
+\textbf{参数与约定。}参数取自四卷文档的参数表；分布记号有歧义
+时以\textbf{参考实现}裁决：FLIT 的 $T$ 依其 \code{params.h} 与
+Algorithm 2 判为每符号概率（方差 $2T$），其规范散文的「占比」
+表述与实现矛盾（两种读法均测试）；ZEN 的 $S_a$ 定义明确
+（$\Pr[\pm1]{=}a$ 各取）；NEV 的 1409 是 R 系列模数 $q$；
+DTRU 脚本输入秘密侧 $\sigma{=}\sqrt{k_r/2}$。和分布
+（如 $B_1{+}S_{3/32}$）用方差匹配的高斯代理——\textbf{代理
+等价性是近似}：固定重量三值、独立三值与高斯在方差之外的性质
+不同，涉及猜测的攻击（dual\_hybrid）对其敏感
+（\S\ref{sec:l3}）。
+
+\textbf{工具。}lattice-estimator 于 FLIT/ZEN 指定 commit
+（\code{6019056}，2026-04-28；\code{3e48ef4}，2026-06-27）与
+当前 master（\code{53da598}，2026-08-19），Sage 10.9；
+DTRU 用其引用的 Kyber 脚本。攻击面按各方案自述配置：RLWE 跑
+\code{primal\_usvp} 与 \code{dual\_hybrid}，NTRU 跑
+\code{primal\_bdd} 与「NTRU $=$ LWE$(b{=}0)$」建模（NEV 自述
+方法）；成本模型 ADPS16（CoreSVP）为主、MATZOV 对照。
+Kyber-512 校准：$\beta{=}406$，与已知一致~\cite{newhope,kyber}。
+
+\section{教训一：输入还原误差的量化}\label{sec:l1}
+
+我们首轮复现曾报告 FLIT/ZEN/DTRU 系统性偏低 $18\sim44$ bits、
+NEV 出现 $\pm 170\sim 300$ bits 异常。逐项勘误后，这些「差距」
+的主体是复现侧输入误读的叠加（表~\ref{tab:sens}）。
+
+\begin{table}[htbp]\centering\small
+\caption{四类输入误读的量化影响（首轮 $\to$ 修正后，bits）}\label{tab:sens}
+\begin{tabular}{@{}llll@{}}
+\toprule
+误读类 & 案例 & 首轮 $\to$ 后 & 影响 \\
+\midrule
+记号歧义 & FLIT $T$ 按散文读（方差 $T$） & $105.7 \to 118.8$；$241.2 \to 267.2$ & $-13.1/-26.0$ \\
+表结构误读 & NEV 把 $q{=}1409$ 读作 $n$ & $309.2/280.6 \to 135.8/583.7$ & $+173/-303$ \\
+分布族近似 & ZEN $S_a$ 方差取 $a$（应 $2a$） & $99.3 \to 127.6$ 等 & $-13 \sim -29$ \\
+$\sigma$ 侧选错 & DTRU 输入 $\sqrt{1/2}$（应 $\sqrt{k_r/2}$） & $135.1 \to 148.3$ 等 & $-13 \sim -41$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+其中 FLIT 的记号歧义源自其文档自身：规范散文（「nonzero 系数
+占比」）、Algorithm 2 伪代码与参考实现 \code{params.h}、安全表
+三方不一致——后三方一致（每符号 $\sigma$），散文是错的。该
+不一致已向征集方通报为文档问题；对复现者而言，按散文读会
+系统性低估其安全性。
+
+\section{教训二：搜索域上限}\label{sec:l2}
+
+lattice-estimator 的 \code{conf.py} 在三个使用版本中均设置
+\begin{quote}\small
+\code{max\_beta = 1754 \# Upper bound on blocksize, for security\\
+levels of at most 512 bits.}
+\end{quote}
+\code{primal\_usvp} 与 dual 系列的优化范围由它限定。14 套参数
+中 6 套的声称安全等级高于 512 bits（Flit-512、ZEN-512、
+NEV-R3、DTRU-1536/2048 等），其最优 $\beta$（1802--1999）超出
+默认搜索域，于是默认配置返回 \code{rop}$=\infty$。我们首轮把
+其解读为「声称不可行/不可复现」，并猜测了错误的机制（网格
+漏搜「可行薄片」）——该猜测已被否定并撤回。
+
+正确的诊断与修复很简单：\textbf{在进程内提升上限}（不改源码）：
+\begin{verbatim}
+import estimator.lwe_primal as LP, estimator.lwe_dual as LD
+LP.max_beta_global = 2200; LD.max_beta_global = 2200
+\end{verbatim}
+提升后，优化器直接给出（默认 ADPS16，$d{=}n{+}m{+}1$）：
+
+\begin{table}[htbp]\centering\small
+\caption{默认上限 vs 上限 2200（优化器直接输出）}\label{tab:cap}
+\begin{tabular}{@{}llrrll@{}}
+\toprule
+实例（建模） & 声称 & \multicolumn{2}{c}{上限 2200} & 一致性 & 默认 \\
+ &  & $\beta$ & $\log_2$\code{rop} & （差） & 上限 \\
+\midrule
+Flit-512（LWE，固定重量代理 var $7/8$） & 550.4 & 1885 & 550.420 & $+0.02$ & $\infty$ \\
+ZEN-512 NTRU（LWE$(b{=}0)$，var $3/16$） & 526.2 & 1802 & 526.184 & $-0.02$ & $\infty$ \\
+NEV-R3（固定重量代理） & 583 & 1999 & 583.708 & $+0.7$ & $\infty$ \\
+NEV-R3（均匀三值 DG 代理） & 583 & 1999 & 583.708 & $+0.7$ & $\infty$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+四组在 \code{53da598} 与 \code{3e48ef4} 上结果相同，Flit-512
+另在 \code{6019056} 复核。要点有三：
+(1) \code{rop}$=\infty$ 在此的语义是\textbf{搜索域未覆盖}，
+不是「实例不可解」或「声称错误」；
+(2) 该上限是源码注释明示的设计选择（512-bit 等级），但
+\textbf{失败语义未文档化}，跨过它的声称值在默认配置下不可复现；
+(3) 我们此前把 NTRU 模块对 $n{=}2048$ 恒返回 $\beta{=}1755$
+（$=$ 上限$+1$）解释为「overstretched fatigue 饱和」——该解释
+\textbf{不成立}：按工具自身判据
+$\texttt{ntru\_fatigue\_lb}(2048){=}416{,}463 \gg q$，这些实例
+并非 overstretched；恒定 $\beta$ 来自上限截断。此前的 fatigue
+表述一并撤回。
+
+作为诊断手段，「把声称点 $(m,\beta)$ 代入闭式成功条件求值」
+仍有效（我们以此先于上限实验定位了问题），但它只是验证
+「存在满足启发式条件的攻击点」，不能升级为全局最优性或
+方案安全性证明。
+
+\section{教训三：完整成本口径}\label{sec:l3}
+
+$0.292\beta$ 是块大小的基础成本（CoreSVP 口径），primal 攻击
+在 ADPS16 下 $\log_2$\code{rop} $= 0.292\beta$ 恰好成立；
+但 \code{dual\_hybrid} 的完整 \code{rop} 还含猜测、FFT 与重复
+项。ZEN 的头条值是其 estimator 输出的完整成本，与之比较必须
+用完整 \code{rop}：
+
+\begin{table}[htbp]\centering\small
+\caption{ZEN-512 RLWE：$0.292\beta$ vs 完整 \code{rop}
+（\code{3e48ef4}，ADPS16）}\label{tab:fullcost}
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+口径 & $\beta$ & 值 & 与声称 519.9 之差 & 备注 \\
+\midrule
+$0.292\beta$（错误口径） & 1707 & 498.444 & $-21.5$ & 已撤回 \\
+完整 $\log_2$\code{rop} & 1707 & 515.817 & $\mathbf{-4.1}$ &
+$m{=}1197$，重复 $2^{16.9}$，$\zeta{=}336$ \\
+含压缩噪声（完整） & 1855 & 588.068 & $+68.2$ & 与文档「忽略压缩」不符 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+即 ZEN-512 RLWE 面与声称仅差约 $4.1$ bits——在我们代理分布
+与配置下的\textbf{未归因小残差}，不构成方向性结论。同理，
+ZEN-128/256 的保守偏差按完整成本为 $+14.3/+13.5$ bits
+（dual\_hybrid 完整 \code{rop} $143.7/275.4$ vs 声称
+$129.4/261.9$）。需强调：dual\_hybrid 依赖秘密分布的支持集与
+猜测概率，固定重量三值、独立三值与方差匹配高斯\textbf{并非
+自动等价}；「方差相同」不构成精确复现的证明，本表数值均以
+所用代理为条件。
+
+\section{修正后的逐套清单}\label{sec:inventory}
+
+「复现成功」的判定规则（预先声明）：在方案\textbf{自身口径}
+与攻击面上，公共工具在显式配置（含搜索上限）下的输出与声称
+之差 $\le 4$ bits（$\beta$ 差 $\le 1$ 视为取整一致）。
+按套（非按攻击面）计：\textbf{13/14 一致，1 套实质残差}。
+
+\begin{table}[htbp]\centering\small
+\caption{逐套清单（C 为该套头条口径下的经典 bits；差 $=$ 复现 $-$ 声称）}\label{tab:inv}
+\begin{tabular}{@{}llllr@{}}
+\toprule
+参数集 & 攻击面/口径 & 复现（$\beta$，$\log_2$\code{rop}） & 声称 & 差 \\
+\midrule
+Flit-128 & RLWE/NTRU primal，$0.292\beta$ & 407/407 & 118.8 & $\le 0.3$ \\
+Flit-256 & 同上 & 915/915 & 267.2 & $0.0$ \\
+Flit-512 & 同上（上限 2200） & 1885，550.42 & 550.4 & $+0.02$ \\
+ZEN-128 & NTRU primal & 437，127.6 & 128.5 & $-0.9$ \\
+ZEN-256 & NTRU primal & 880，257.0 & 257.5 & $-0.5$ \\
+ZEN-512 & NTRU primal（上限 2200） & 1802，526.18 & 526.2 & $-0.02$ \\
+ & RLWE dual\_hybrid 完整 & 1707，515.82 & 519.9 & $-4.1$ \\
+NEV-R1 & NTRU/RLWE primal & 464/465 & 135 & $\le 0.8$ \\
+NEV-R2 & 同上 & 974/976 & 284（$\beta{=}975$） & $\pm 1\beta$ \\
+NEV-R3 & NTRU primal（上限 2200） & 1999，583.71 & 583 & $+0.7$ \\
+DTRU-648 & 脚本 primal & 507，148.29 & 164 & $\mathbf{-15.7}$ \\
+DTRU-768 & 同上 & 684，200.1 & 198 & $+2.1$ \\
+DTRU-1024 & 同上 & 920，269.1 & 271 & $-1.9$ \\
+DTRU-1536 & 同上 & 1394，407.7 & 411 & $-3.3$ \\
+DTRU-2048 & 同上 & 1931，564.8 & 567 & $-2.2$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+精确一致（$\beta$ 或 $\log_2$\code{rop} 到小数位）的 5 套：
+Flit-256、Flit-512、ZEN-512（NTRU 面）、NEV-R1、NEV-R3
+（$+0.7$ 为 $\beta$ 取整差）；NEV-R2 差 $\pm 1\beta$，此前
+「逐位一致」的说法不准确，已更正。ZEN-128/256 的 RLWE 面
+保守偏差（$+14.3/+13.5$）不构成问题。
+
+\textbf{唯一实质残差：DTRU-648}。在明确的脚本/输入
+（n$=$m$_{\max}{=}648$，$q{=}3457$，$\sigma{=}1$）下差
+$-15.7$ bits；将 $\sigma^2$ 改为 2（$\beta{=}560$）得
+$163.79\approx$ 声称 164。可支持的结论：\textbf{在所列配置下
+存在约 15.7 bits 的未解释差异，改变方差可得接近声称的数值}。
+不可支持的结论：设计者实际用了 CBD-4、或「参数表与估算必有一
+错」——不同攻击、优化域与成本约定可产生相近数值，反解不具
+唯一性。闭合该残差需原始估算输入。
+
+\section{讨论：对征集流程的要求}\label{sec:disc}
+
+三个教训各对应一项可执行要求：
+(1) 随包估算脚本（参数表、commit、分布到工具输入的映射），
+使输入还原不再是猜谜（教训一）；
+(2) 声称值随附\textbf{完整配置}（含搜索上限等非常规项）与
+$(m,\beta)$ 点，使 \code{rop}$=\infty$ 类失败可归因（教训二）；
+(3) 头条口径显式标注（成本模型、是否完整 \code{rop}、取最小
+方式），混合攻击不得以 $0.292\beta$ 摘要（教训三）。
+FLIT 的散文/伪代码/实现三方不一致应作为文档质量案例通报。
+
+\textbf{局限。}和分布与均匀三值采用方差匹配代理，涉及猜测的
+攻击对其敏感；搜索上限提升后未做穷尽性复核（如 dual 系列在
+上限处的行为）；本文为估算审计，未执行任何实际格攻击，全部
+数值是模型预测而非安全下界。
+
+\section{结论}
+
+以差距为中心审计 NICCS 四卷 KEM 的 14 套推荐参数后：首轮的
+「系统性差距」被分解为输入误读（已量化）、搜索域上限
+（已定位与绕过）与成本口径（已改用完整 \code{rop}）三类成因；
+修正后 13/14 套与公共工具一致（5 套精确），唯一实质残差
+DTRU-648（15.7 bits，未归因）。三个教训连同逐点核验、上限
+实验与完整成本重算，构成一套可复用的估算审计流程；
+其自身不构成新攻击或安全证明。
+
+\section*{复现配置与产物}\label{sec:artifact}
+
+\addcontentsline{toc}{section}{复现配置与产物}
+
+\noindent 工具与版本：lattice-estimator commits
+\code{6019056}（2026-04-28）、\code{3e48ef4}（2026-06-27）、
+\code{53da598}（2026-08-19）；Sage 10.9（micromamba）；
+\code{pq-crystals/security-estimates}（Kyber 脚本）。
+脚本（随文库存档于 \code{code/}）：
+\code{run\_estimates\_corrected.py}（基线电池）、
+\code{review\_verify.py}（上限实验与完整成本重算）、
+\code{gap\_localize.py}（闭式条件核验）、
+\code{run\_dtru\_kyber.py}（DTRU 脚本复现）。运行示例：
+\begin{verbatim}
+micromamba run -n sage python review_verify.py   # 上限+完整成本
+python run_dtru_kyber.py                          # DTRU 五套
+\end{verbatim}
+全部原始输出（JSON 与日志）随文库存档；上限修改仅在进程内
+进行，未改 estimator 源码。
+
+\begin{thebibliography}{99}\small
+
+\bibitem{estimator}
+M.~R. Albrecht, et al. (contributors).
+\newblock The Lattice Estimator: security estimates for LWE/NTRU.
+\newblock Software, \url{https://github.com/malb/lattice-estimator},
+  commits \code{6019056} (2026-04-28), \code{3e48ef4} (2026-06-27),
+  \code{53da598} (2026-08-19).
+
+\bibitem{newhope}
+E. Alkim, L. Ducas, T. Pöppelmann, P. Schwabe.
+\newblock Post-quantum Key Exchange---A New Hope.
+\newblock \emph{USENIX Security Symposium}, 2016. (CoreSVP 模型与
+  uSVP-GSA 条件.)
+
+\bibitem{matzov}
+MATZOV.
+\newblock Revisiting the Security of Lattice-Based Schemes.
+\newblock IACR ePrint 2022/939, 2022.
+
+\bibitem{dp23}
+L. Ducas, M. Pulles.
+\newblock Does the Dual(-Hybrid) Attack Even Work?
+\newblock \emph{CRYPTO}, 2023.
+
+\bibitem{kyber-est}
+P. Schwabe et al. (pq-crystals).
+\newblock security-estimates: scripts for estimating the security
+  of Kyber.
+\newblock Software,
+  \url{https://github.com/pq-crystals/security-estimates}.
+
+\bibitem{kyber}
+J. Bos, L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, J. Schanck,
+P. Schwabe, G. Seiler, D. Stehlé.
+\newblock CRYSTALS---Kyber: a CCA-secure module-lattice-based KEM.
+\newblock \emph{IEEE EuroS\&P}, 2018.
+
+\bibitem{chen15}
+Y. Chen.
+\newblock Lattice Algorithms and Cryptanalysis of Lattice-Based
+  Cryptography.
+\newblock PhD thesis, École Normale Supérieure de Lyon, 2015.
+
+\bibitem{kannan83}
+R. Kannan.
+\newblock Improved Algorithms for Integer Programming and Related
+  Lattice Problems.
+\newblock \emph{STOC}, 1983.
+
+\bibitem{bg14}
+S. Bai, S. D. Galbraith.
+\newblock An Improved Compression Technique for Signatures Based
+  on Learning with Errors.
+\newblock \emph{CT-RSA} (Topics in Cryptology), LNCS 8366,
+  pp.~28--47, 2014. (小秘密 LWE 的 Bai--Galbraith 嵌入.)
+
+\bibitem{flit-spec}
+Y. Pan, Y. Wu, Q. Lu, C. Cheng, R. Liu, Q. Du.
+\newblock FLIT: A Lattice-Based Key Encapsulation Mechanism---Algorithm
+  Specification and Supporting Documentation.
+\newblock NICCS 提交文档, 2026.
+
+\bibitem{zen-spec}
+X. Lu et al.
+\newblock ZEN Algorithm Specifications.
+\newblock NICCS 提交文档, 2026.
+
+\bibitem{nev-spec}
+NEV 设计组.
+\newblock 算法文本：NEV.
+\newblock NICCS 提交文档, 2026.
+
+\bibitem{dtru-spec}
+DTRU 设计组.
+\newblock DTRU Algorithm Specifications.
+\newblock NICCS 提交文档, 2026.
+
+\bibitem{fatigue}
+L. Ducas, M. van Woerden.
+\newblock The NTRU Fatigue.
+\newblock \emph{ASIACRYPT}, 2022. (overstretched 判据的出处；
+  本文实例未触发该机制.)
+
+\end{thebibliography}
+
+\end{document}
